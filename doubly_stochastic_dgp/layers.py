@@ -14,8 +14,9 @@
 
 import torch
 import numpy as np
-from braingp import Pytfunct as pf
+from braingp import bpflow as bf
 from gpytorch.priors import MultivariateNormalPrior as Gaussian_prior
+from gpytorch import Module
 
 """from gpflow.conditionals import conditional
 from gpflow.features import InducingPoints
@@ -33,7 +34,7 @@ from gpflow.logdensities import multivariate_normal"""
 from doubly_stochastic_dgp.utils import reparameterize
 
 
-class Layer():
+class Layer(Module):                                             # module treats inputs as parameters 
     def __init__(self, input_prop_dim=None, **kwargs):
         """
         A base class for GP layers. Basic functionality for multisample conditional, and input propagation
@@ -67,7 +68,7 @@ class Layer():
             S, N, D = X.size()
             mean = torch.zeros(S,N,D)
             var = torch.zeros(S,N,N,D)
-            mean = a(X).(torch.FloatTensor)
+            mean = a(X).(torch.FloatTensor)              #checkspot
             var  = a(X).(torch.FloatTensor)
             return torch.stack(mean), torch.stack(var)
             
@@ -154,7 +155,7 @@ class SVGP_Layer(Layer):
         self.q_mu = q_mu
 
         q_sqrt = np.tile(np.eye(self.num_inducing)[None, :, :], [num_outputs, 1, 1])
-        transform = pf.LowerTriangular(self.num_inducing, num_matrices=num_outputs)
+        transform = bf.LowerTriangular(self.num_inducing, num_matrices=num_outputs)
         self.q_sqrt = transform.forward(q_sqrt)
 
         self.feature = InducingPoints(Z)
@@ -165,7 +166,7 @@ class SVGP_Layer(Layer):
         self.white = white
 
         if not self.white:  # initialize to prior
-            Ku = self.kern.compute_K_symm(Z)
+            Ku = self.kern.compute_K_symm(Z)              #Check kernel defs or add to bpflow
             Lu = np.linalg.cholesky(Ku + np.eye(Z.shape[0])*settings.jitter)
             self.q_sqrt = np.tile(Lu[None, :, :], [num_outputs, 1, 1])
 
@@ -177,8 +178,8 @@ class SVGP_Layer(Layer):
         if self.needs_build_cholesky:
             self.Ku = self.feature.Kuu(self.kern, jitter=settings.jitter)
             self.Lu = torch.cholesky(self.Ku)
-            self.Ku_tiled = pf.tile(self.Ku[None, :, :], [self.num_outputs, 1, 1])
-            self.Lu_tiled = pf.tile(self.Lu[None, :, :], [self.num_outputs, 1, 1])
+            self.Ku_tiled = bf.tile(self.Ku[None, :, :], [self.num_outputs, 1, 1])
+            self.Lu_tiled = bf.tile(self.Lu[None, :, :], [self.num_outputs, 1, 1])
             self.needs_build_cholesky = False
 
 
@@ -265,7 +266,7 @@ class SGPMC_Layer(SVGP_Layer):
         self.q_sqrt = None
 
     def KL(self):
-        return tf.cast(0., dtype=settings.float_type)
+        return torch.cast(0., dtype=settings.float_type)
 
 
 class GPMC_Layer(Layer):
@@ -338,8 +339,8 @@ class GPR_Layer(Collapsed_Layer):
             shape = torch.stack([1, 1, tf.shape(self._Y)[1]]) #check stack function for torch library
             fvar = pf.tile(tf.expand_dims(fvar, 2), shape)
         else:
-            fvar = self.kern.Kdiag(Xnew) - tf.cumsum(tf.square(A), dim=0)[:,a.size(1)-1]
-            fvar = pf.tile(torch.reshape(fvar, (-1, 1)), [1, tf.shape(self._Y)[1]])
+            fvar = self.kern.Kdiag(Xnew) - torch.cumsum(torch.square(A), dim=0)[:,a.size(1)-1]
+            fvar = bf.tile(torch.reshape(fvar, (-1, 1)), [1, tf.shape(self._Y)[1]])
         return fmean, fvar
 
     def build_likelihood(self):
@@ -380,32 +381,32 @@ def gplvm_build_likelihood(self, X_mean, X_var, Y, variance):
     if X_var is None:
         # SGPR
         num_inducing = len(self.feature)
-        num_data = tf.cast(tf.shape(Y)[0], settings.float_type)
-        output_dim = tf.cast(tf.shape(Y)[1], settings.float_type)
+        num_data = torch.cast(Y.size(0)).(torch.FloatTensor)
+        output_dim = torch.cast(Y.size(1)).(torch.FloatTensor)
 
         err = Y - self.mean_function(X_mean)
         Kdiag = self.kern.Kdiag(X_mean)
         Kuf = self.feature.Kuf(self.kern, X_mean)
         Kuu = self.feature.Kuu(self.kern, jitter=settings.numerics.jitter_level)
-        L = tf.cholesky(Kuu)
-        sigma = tf.sqrt(variance)
+        L = torch.cholesky(Kuu)
+        sigma = torch.sqrt(variance)
 
         # Compute intermediate matrices
-        A = tf.matrix_triangular_solve(L, Kuf, lower=True) / sigma
-        AAT = tf.matmul(A, A, transpose_b=True)
-        B = AAT + tf.eye(num_inducing, dtype=settings.float_type)
-        LB = tf.cholesky(B)
-        Aerr = tf.matmul(A, err)
-        c = tf.matrix_triangular_solve(LB, Aerr, lower=True) / sigma
+        A = torch.triangular_solve(L, Kuf, upper=False) / sigma
+        AAT = torch.matmul(A, torch.transpose(A))
+        B = AAT + torch.eye(num_inducing).float()
+        LB = torch.cholesky(B)
+        Aerr = torch.matmul(A, err)
+        c = torch.triangular_solve(LB, Aerr, upper=False) / sigma
 
         # compute log marginal bound
-        bound = -0.5 * num_data * output_dim * np.log(2 * np.pi)
-        bound += tf.negative(output_dim) * tf.reduce_sum(tf.log(tf.matrix_diag_part(LB)))
+        bound = -0.5 * num_data * output_dim * torch.log(2 * np.pi)
+        bound += torch.negative(output_dim) * tf.reduce_sum(tf.log(tf.matrix_diag_part(LB)))
         bound -= 0.5 * num_data * output_dim * tf.log(variance)
-        bound += -0.5 * tf.reduce_sum(tf.square(err)) / variance
-        bound += 0.5 * tf.reduce_sum(tf.square(c))
-        bound += -0.5 * output_dim * tf.reduce_sum(Kdiag) / variance
-        bound += 0.5 * output_dim * tf.reduce_sum(tf.matrix_diag_part(AAT))
+        bound += -0.5 * torch.cumsum(tf.square(err))[] / variance
+        bound += 0.5 * torch.cumsum(tf.square(c))
+        bound += -0.5 * output_dim * torch.cumsum(Kdiag) / variance
+        bound += 0.5 * output_dim * torch.cumsum(tf.matrix_diag_part(AAT))
 
         return bound
 
