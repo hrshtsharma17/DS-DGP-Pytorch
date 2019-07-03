@@ -2,7 +2,7 @@ import torch
 
 from gpytorch import settings
 from gpytorch.likelihoods import GaussianLikelihoodBase
-from braingp import Pytfunct as pf
+from braingp.bpflow as bf
 
 
 def reparameterize(mean, var, z, full_cov=False):
@@ -59,7 +59,7 @@ class BroadcastingLikelihood():
 
         else:
             S, N, D = vars_SND.size()
-            vars_tiled = [pf.tile(x[None, :, :],S, 1, 1) for x in vars_ND]  #Error benchmark
+            vars_tiled = [bf.tile(x[None, :, :],S, 1, 1) for x in vars_ND]  #Error benchmark
 
             flattened_SND = [torch.reshape(x, [S*N, D]) for x in vars_SND]
             flattened_tiled = [torch.reshape(x, [S*N, -1]) for x in vars_tiled]
