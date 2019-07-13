@@ -11,17 +11,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import tensorflow as tf
-import numpy as np
 
-from gpflow.params import DataHolder, Minibatch
-from gpflow import autoflow, params_as_tensors, ParamList
-from gpflow.models.model import Model
-from gpflow.mean_functions import Identity, Linear
-from gpflow.mean_functions import Zero
-from gpflow.quadrature import mvhermgauss
-from gpflow.likelihoods import Gaussian
-from gpflow import settings
+import torch as th
+import numpy as np
+import bpflow as bf
+
+from torch.nn import Parameter
+from .model import Model, Param
+from .mean_functions import Identity, Linear
+from .mean_functions import Zero
+from numpy.polynomial.hermite import hermval   #from .quadrature import mvhermgauss
+from .likelihoods import Gaussian
 float_type = settings.float_type
 
 from doubly_stochastic_dgp.utils import reparameterize
@@ -47,19 +47,15 @@ class DGP_Base(Model):
 
         self.num_data = num_data or X.shape[0]
         if minibatch_size:
-            self.X = Minibatch(X, minibatch_size, seed=0)
-            self.Y = Minibatch(Y, minibatch_size, seed=0)
-        else:
-            self.X = DataHolder(X)
-            self.Y = DataHolder(Y)
+            self.X = Minibatch(X, minibatch_size, seed=0)  #change
+            self.Y = Minibatch(Y, minibatch_size, seed=0)  
 
         self.likelihood = BroadcastingLikelihood(likelihood)
 
-        self.layers = ParamList(layers)
+        self.layers = ParamList(layers)  #change
 
-    @params_as_tensors
     def propagate(self, X, full_cov=False, S=1, zs=None):
-        sX = tf.tile(tf.expand_dims(X, 0), [S, 1, 1])
+        sX = bf.tile(th.expand_dims(X, 0), [S, 1, 1])
 
         Fs, Fmeans, Fvars = [], [], []
 
@@ -74,7 +70,6 @@ class DGP_Base(Model):
 
         return Fs, Fmeans, Fvars
 
-    @params_as_tensors
     def _build_predict(self, X, full_cov=False, S=1):
         Fs, Fmeans, Fvars = self.propagate(X, full_cov=full_cov, S=S)
         return Fmeans[-1], Fvars[-1]
@@ -86,43 +81,41 @@ class DGP_Base(Model):
         """
         Fmean, Fvar = self._build_predict(X, full_cov=False, S=self.num_samples)
         var_exp = self.likelihood.variational_expectations(Fmean, Fvar, Y)  # S, N, D
-        return tf.reduce_mean(var_exp, 0)  # N, D
+        return th.reduce_mean(var_exp, 0)  # N, D
 
-    @params_as_tensors
+
     def _build_likelihood(self):
-        L = tf.reduce_sum(self.E_log_p_Y(self.X, self.Y))
-        KL = tf.reduce_sum([layer.KL() for layer in self.layers])
-        scale = tf.cast(self.num_data, float_type)
-        scale /= tf.cast(tf.shape(self.X)[0], float_type)  # minibatch size
+        L = th.cumsum(self.E_log_p_Y(self.X, self.Y))[:]
+        KL = th.cumsum([layer.KL() for layer in self.layers])[:]
+        scale = th.cumsum(self.num_data, float_type)
+        scale /= th.cast(th.shape(self.X)[0], float_type)  # minibatch size
         return L * scale - KL
 
-    @autoflow((float_type, [None, None]), (tf.int32, []))
     def predict_f(self, Xnew, num_samples):
         return self._build_predict(Xnew, full_cov=False, S=num_samples)
 
-    @autoflow((float_type, [None, None]), (tf.int32, []))
     def predict_f_full_cov(self, Xnew, num_samples):
         return self._build_predict(Xnew, full_cov=True, S=num_samples)
 
-    @autoflow((float_type, [None, None]), (tf.int32, []))
+    
     def predict_all_layers(self, Xnew, num_samples):
         return self.propagate(Xnew, full_cov=False, S=num_samples)
 
-    @autoflow((float_type, [None, None]), (tf.int32, []))
+
     def predict_all_layers_full_cov(self, Xnew, num_samples):
         return self.propagate(Xnew, full_cov=True, S=num_samples)
 
-    @autoflow((float_type, [None, None]), (tf.int32, []))
+    
     def predict_y(self, Xnew, num_samples):
         Fmean, Fvar = self._build_predict(Xnew, full_cov=False, S=num_samples)
         return self.likelihood.predict_mean_and_var(Fmean, Fvar)
 
-    @autoflow((float_type, [None, None]), (float_type, [None, None]), (tf.int32, []))
+
     def predict_density(self, Xnew, Ynew, num_samples):
         Fmean, Fvar = self._build_predict(Xnew, full_cov=False, S=num_samples)
         l = self.likelihood.predict_density(Fmean, Fvar, Ynew)
-        log_num_samples = tf.log(tf.cast(num_samples, float_type))
-        return tf.reduce_logsumexp(l - log_num_samples, axis=0)
+        log_num_samples = th.log(th.cast(num_samples, float_type))
+        return th.reduce_logsumexp(l - log_num_samples, axis=0)
 
 
 class DGP_Quad(DGP_Base):
@@ -139,7 +132,7 @@ class DGP_Quad(DGP_Base):
         # set up the quadrature points
         self.H = H
         self.D_quad = sum([layer.q_mu.shape[1] for layer in self.layers[:-1]])
-        gh_x, gh_w = mvhermgauss(H, self.D_quad)
+        gh_x, gh_w = hermval(H, self.D_quad)
         gh_x *= 2. ** 0.5  # H**quad_dims, quad_dims
         self.gh_w = gh_w * np.pi ** (-0.5 * self.D_quad)  # H**quad_dims
 
@@ -153,7 +146,7 @@ class DGP_Quad(DGP_Base):
             s += layer.q_mu.shape[1]
 
         # finish with zeros (we don't need to do quadrature over the final layer and this will never get used
-        self.gh_x.append(tf.zeros((1, 1, 1), dtype=settings.float_type))
+        self.gh_x.append(th.zeros((1, 1, 1), dtype=settings.float_type))
 
     def E_log_p_Y(self, X, Y):
         """
@@ -162,7 +155,7 @@ class DGP_Quad(DGP_Base):
         """
         _, Fmeans, Fvars = self.propagate(X, zs=self.gh_x, full_cov=False, S=self.H**self.D_quad)
         var_exp = self.likelihood.variational_expectations(Fmeans[-1], Fvars[-1], Y)  # S, N, D
-        return tf.reduce_sum(var_exp * self.gh_w[:, None, None], 0)  # N, D
+        return th.cumsum(var_exp * self.gh_w[:, None, None], 0)  # N, D
 
 
 class DGP(DGP_Base):

@@ -1,7 +1,7 @@
 import torch
 
 from gpytorch import settings
-from gpytorch.likelihoods import GaussianLikelihoodBase
+from braingp.likelihood import Gaussian
 from braingp.bpflow as bf
 
 
@@ -48,7 +48,7 @@ class BroadcastingLikelihood():
     def __init__(self, likelihood):
         self.likelihood = likelihood
 
-        if isinstance(likelihood, GaussianLikelihoodBase):
+        if isinstance(likelihood, Gaussian):
             self.needs_broadcasting = False
         else:
             self.needs_broadcasting = True

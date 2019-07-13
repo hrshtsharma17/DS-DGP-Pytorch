@@ -1,5 +1,3 @@
-# Copyright 2017 Hugh Salimbeni
-#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -12,11 +10,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+#DevNote : self.feature creation for the implementation of U(z) implementation.
+
 import torch
 import numpy as np
 from braingp import bpflow as bf
 from gpytorch.priors import MultivariateNormalPrior as Gaussian_prior
-from gpytorch import Module
+from braingp.model import Model
 
 """from gpflow.conditionals import conditional
 from gpflow.features import InducingPoints
@@ -34,7 +34,7 @@ from gpflow.logdensities import multivariate_normal"""
 from doubly_stochastic_dgp.utils import reparameterize
 
 
-class Layer(Module):                                             # module treats inputs as parameters 
+class Layer(Model):                                             # module treats inputs as parameters 
     def __init__(self, input_prop_dim=None, **kwargs):
         """
         A base class for GP layers. Basic functionality for multisample conditional, and input propagation
@@ -72,14 +72,14 @@ class Layer(Module):                                             # module treats
             var  = a(X).(torch.FloatTensor)
             return torch.stack(mean), torch.stack(var)
             
-            #mean, var = tf.map_fn(f, X, dtype=(tf.float64, tf.float64))
-            #return tf.stack(mean), tf.stack(var)
+            #mean, var = torch.map_fn(f, X, dtype=(torch.float64, torch.float64))
+            #return torch.stack(mean), torch.stack(var)
 
         else:
             S, N, D = X.size()
             X_flat = torch.reshape(X, [S * N, D])
             mean, var = self.conditional_ND(X_flat)
-            return [tf.reshape(m, [S, N, self.num_outputs]) for m in [mean, var]]
+            return [torch.reshape(m, [S, N, self.num_outputs]) for m in [mean, var]]
 
     def sample_from_conditional(self, X, z=None, full_cov=False):
         """
@@ -217,7 +217,7 @@ class SVGP_Layer(Layer):
             Kff = self.kern.K(X)
         else:
             # (num_latent, num_X)
-            #delta_cov = tf.reduce_sum(A_tiled * B, 1)
+            #delta_cov = torch.reduce_sum(A_tiled * B, 1)
             delta_cov =torch.cumsum(A_tiled * B, dim=1)[:,a.size(0)-1]
             Kff = self.kern.Kdiag(X)
 
@@ -249,7 +249,7 @@ class SVGP_Layer(Layer):
             Kinv_m = torch.cholesky_solve(self.q_mu , self.Lu)
             KL += 0.5 * torch.cumsum(self.q_mu * Kinv_m, dim=0)[:,a.size(1)-1]
         else:
-            KL += 0.5 * torch.cumsum(tf.square(self.q_sqrt),dim=0)[:,a.size(1)-1]
+            KL += 0.5 * torch.cumsum(torch.square(self.q_sqrt),dim=0)[:,a.size(1)-1]
             KL += 0.5 * torch.cumsum(self.q_mu**2,dim=0)[:,a.size(1)-1]
 
         return KL
@@ -336,11 +336,11 @@ class GPR_Layer(Collapsed_Layer):
         fmean = torch.matmul(torch.transpose(A), V) + self.mean_function(Xnew) 
         if full_cov:
             fvar = self.kern.K(Xnew) - torch.matmul(torch.transpose(A), A)
-            shape = torch.stack([1, 1, tf.shape(self._Y)[1]]) #check stack function for torch library
-            fvar = pf.tile(tf.expand_dims(fvar, 2), shape)
+            shape = torch.stack([1, 1, torch.shape(self._Y)[1]]) #check stack function for torch library
+            fvar = pf.tile(torch.expand_dims(fvar, 2), shape)
         else:
             fvar = self.kern.Kdiag(Xnew) - torch.cumsum(torch.square(A), dim=0)[:,a.size(1)-1]
-            fvar = bf.tile(torch.reshape(fvar, (-1, 1)), [1, tf.shape(self._Y)[1]])
+            fvar = bf.tile(torch.reshape(fvar, (-1, 1)), [1, torch.shape(self._Y)[1]])
         return fmean, fvar
 
     def build_likelihood(self):
@@ -348,7 +348,7 @@ class GPR_Layer(Collapsed_Layer):
         K = self.kern.K(self._X_mean) + torch.eye(self._X_mean.size(0)) * self._lik_variance
         L = torch.cholesky(K)
         m = self.mean_function(self._X_mean)
-        return tf.cumsum(multivariate_normal(self._Y, m, L), dim=0)[:,a.size(1)-1]
+        return torch.cumsum(multivariate_normal(self._Y, m, L), dim=0)[:,a.size(1)-1]
 
 
 class SGPR_Layer(Collapsed_Layer):
@@ -401,60 +401,60 @@ def gplvm_build_likelihood(self, X_mean, X_var, Y, variance):
 
         # compute log marginal bound
         bound = -0.5 * num_data * output_dim * torch.log(2 * np.pi)
-        bound += torch.negative(output_dim) * tf.reduce_sum(tf.log(tf.matrix_diag_part(LB)))
-        bound -= 0.5 * num_data * output_dim * tf.log(variance)
-        bound += -0.5 * torch.cumsum(tf.square(err))[] / variance
-        bound += 0.5 * torch.cumsum(tf.square(c))
+        bound += torch.negative(output_dim) * torch.reduce_sum(torch.log(torch.matrix_diag_part(LB)))
+        bound -= 0.5 * num_data * output_dim * torch.log(variance)
+        bound += -0.5 * torch.cumsum(torch.square(err))[] / variance
+        bound += 0.5 * torch.cumsum(torch.square(c))
         bound += -0.5 * output_dim * torch.cumsum(Kdiag) / variance
-        bound += 0.5 * output_dim * torch.cumsum(tf.matrix_diag_part(AAT))
+        bound += 0.5 * output_dim * torch.cumsum(torch.matrix_diag_part(AAT))
 
         return bound
 
 
     else:
 
-        X_cov = tf.matrix_diag(X_var)
+        X_cov = torch.matrix_diag(X_var)
         pX = DiagonalGaussian(X_mean, X_var)
         num_inducing = len(self.feature)
         if hasattr(self.kern, 'X_input_dim'):
-            psi0 = tf.reduce_sum(self.kern.eKdiag(X_mean, X_cov))
+            psi0 = torch.cumsum(self.kern.eKdiag(X_mean, X_cov))[:]
             psi1 = self.kern.eKxz(self.feature.Z, X_mean, X_cov)
-            psi2 = tf.reduce_sum(self.kern.eKzxKxz(self.feature.Z, X_mean, X_cov), 0)
+            psi2 = torch.cumsum(self.kern.eKzxKxz(self.feature.Z, X_mean, X_cov), 0)
         else:
-            psi0 = tf.reduce_sum(expectation(pX, self.kern))
+            psi0 = torch.cumsum(expectation(pX, self.kern))
             psi1 = expectation(pX, (self.kern, self.feature))
-            psi2 = tf.reduce_sum(expectation(pX, (self.kern, self.feature), (self.kern, self.feature)), axis=0)
+            psi2 = torch.cumsum(expectation(pX, (self.kern, self.feature), (self.kern, self.feature)), axis=0)
         Kuu = self.feature.Kuu(self.kern, jitter=settings.numerics.jitter_level)
-        L = tf.cholesky(Kuu)
+        L = torch.cholesky(Kuu)
         sigma2 = variance
-        sigma = tf.sqrt(sigma2)
+        sigma = torch.sqrt(sigma2)
 
         # Compute intermediate matrices
-        A = tf.matrix_triangular_solve(L, tf.transpose(psi1), lower=True) / sigma
-        tmp = tf.matrix_triangular_solve(L, psi2, lower=True)
-        AAT = tf.matrix_triangular_solve(L, tf.transpose(tmp), lower=True) / sigma2
-        B = AAT + tf.eye(num_inducing, dtype=settings.float_type)
-        LB = tf.cholesky(B)
-        log_det_B = 2. * tf.reduce_sum(tf.log(tf.matrix_diag_part(LB)))
-        c = tf.matrix_triangular_solve(LB, tf.matmul(A, Y), lower=True) / sigma
+        A = torch.matrix_triangular_solve(L, torch.transpose(psi1), lower=True) / sigma
+        tmp = torch.matrix_triangular_solve(L, psi2, lower=True)
+        AAT = torch.matrix_triangular_solve(L, torch.transpose(tmp), lower=True) / sigma2
+        B = AAT + torch.eye(num_inducing, dtype=settings.float_type)
+        LB = torch.cholesky(B)
+        log_det_B = 2. * torch.reduce_sum(torch.log(torch.matrix_diag_part(LB)))
+        c = torch.matrix_triangular_solve(LB, torch.matmul(A, Y), lower=True) / sigma
 
         # KL[q(x) || p(x)]
-        # dX_var = self.X_var if len(self.X_var.get_shape()) == 2 else tf.matrix_diag_part(self.X_var)
-        # NQ = tf.cast(tf.size(self.X_mean), settings.float_type)
-        D = tf.cast(tf.shape(Y)[1], settings.float_type)
-        # KL = -0.5 * tf.reduce_sum(tf.log(dX_var)) \
-        #      + 0.5 * tf.reduce_sum(tf.log(self.X_prior_var)) \
+        # dX_var = self.X_var if len(self.X_var.get_shape()) == 2 else torch.matrix_diag_part(self.X_var)
+        # NQ = torch.cast(torch.size(self.X_mean), settings.float_type)
+        D = torch.cast(torch.shape(Y)[1], settings.float_type)
+        # KL = -0.5 * torch.reduce_sum(torch.log(dX_var)) \
+        #      + 0.5 * torch.reduce_sum(torch.log(self.X_prior_var)) \
         #      - 0.5 * NQ \
-        #      + 0.5 * tf.reduce_sum((tf.square(self.X_mean - self.X_prior_mean) + dX_var) / self.X_prior_var)
+        #      + 0.5 * torch.reduce_sum((torch.square(self.X_mean - self.X_prior_mean) + dX_var) / self.X_prior_var)
 
         # compute log marginal bound
-        ND = tf.cast(tf.size(Y), settings.float_type)
-        bound = -0.5 * ND * tf.log(2 * np.pi * sigma2)
+        ND = torch.cast(torch.size(Y), settings.float_type)
+        bound = -0.5 * ND * torch.log(2 * np.pi * sigma2)
         bound += -0.5 * D * log_det_B
-        bound += -0.5 * tf.reduce_sum(tf.square(Y)) / sigma2
-        bound += 0.5 * tf.reduce_sum(tf.square(c))
-        bound += -0.5 * D * (tf.reduce_sum(psi0) / sigma2 -
-                             tf.reduce_sum(tf.matrix_diag_part(AAT)))
+        bound += -0.5 * torch.reduce_sum(torch.square(Y)) / sigma2
+        bound += 0.5 * torch.reduce_sum(torch.square(c))
+        bound += -0.5 * D * (torch.reduce_sum(psi0) / sigma2 -
+                             torch.reduce_sum(torch.matrix_diag_part(AAT)))
         # bound -= KL # don't need this term
         return bound
 
@@ -467,26 +467,26 @@ def gplvm_build_predict(self, Xnew, X_mean, X_var, Y, variance, full_cov=False):
         Kuf = self.feature.Kuf(self.kern, X_mean)
         Kuu = self.feature.Kuu(self.kern, jitter=settings.numerics.jitter_level)
         Kus = self.feature.Kuf(self.kern, Xnew)
-        sigma = tf.sqrt(variance)
-        L = tf.cholesky(Kuu)
-        A = tf.matrix_triangular_solve(L, Kuf, lower=True) / sigma
-        B = tf.matmul(A, A, transpose_b=True) + tf.eye(num_inducing, dtype=settings.float_type)
-        LB = tf.cholesky(B)
-        Aerr = tf.matmul(A, err)
-        c = tf.matrix_triangular_solve(LB, Aerr, lower=True) / sigma
-        tmp1 = tf.matrix_triangular_solve(L, Kus, lower=True)
-        tmp2 = tf.matrix_triangular_solve(LB, tmp1, lower=True)
-        mean = tf.matmul(tmp2, c, transpose_a=True)
+        sigma = torch.sqrt(variance)
+        L = torch.cholesky(Kuu)
+        A = torch.matrix_triangular_solve(L, Kuf, lower=True) / sigma
+        B = torch.matmul(A, A, transpose_b=True) + torch.eye(num_inducing, dtype=settings.float_type)
+        LB = torch.cholesky(B)
+        Aerr = torch.matmul(A, err)
+        c = torch.matrix_triangular_solve(LB, Aerr, lower=True) / sigma
+        tmp1 = torch.matrix_triangular_solve(L, Kus, lower=True)
+        tmp2 = torch.matrix_triangular_solve(LB, tmp1, lower=True)
+        mean = torch.matmul(tmp2, c, transpose_a=True)
         if full_cov:
-            var = self.kern.K(Xnew) + tf.matmul(tmp2, tmp2, transpose_a=True) \
-                  - tf.matmul(tmp1, tmp1, transpose_a=True)
-            shape = tf.stack([1, 1, tf.shape(Y)[1]])
-            var = tf.tile(tf.expand_dims(var, 2), shape)
+            var = self.kern.K(Xnew) + torch.matmul(tmp2, tmp2, transpose_a=True) \
+                  - torch.matmul(tmp1, tmp1, transpose_a=True)
+            shape = torch.stack([1, 1, torch.shape(Y)[1]])
+            var = torch.tile(torch.expand_dims(var, 2), shape)
         else:
-            var = self.kern.Kdiag(Xnew) + tf.reduce_sum(tf.square(tmp2), 0) \
-                  - tf.reduce_sum(tf.square(tmp1), 0)
-            shape = tf.stack([1, tf.shape(Y)[1]])
-            var = tf.tile(tf.expand_dims(var, 1), shape)
+            var = self.kern.Kdiag(Xnew) + torch.reduce_sum(torch.square(tmp2), 0) \
+                  - torch.reduce_sum(torch.square(tmp1), 0)
+            shape = torch.stack([1, torch.shape(Y)[1]])
+            var = torch.tile(torch.expand_dims(var, 1), shape)
         return mean + self.mean_function(Xnew), var
 
     else:
@@ -494,41 +494,41 @@ def gplvm_build_predict(self, Xnew, X_mean, X_var, Y, variance, full_cov=False):
         pX = DiagonalGaussian(X_mean, X_var)
         num_inducing = len(self.feature)
 
-        X_cov = tf.matrix_diag(X_var)
+        X_cov = torch.matrix_diag(X_var)
 
         if hasattr(self.kern, 'X_input_dim'):
             psi1 = self.kern.eKxz(self.feature.Z, X_mean, X_cov)
-            psi2 = tf.reduce_sum(self.kern.eKzxKxz(self.feature.Z, X_mean, X_cov), 0)
+            psi2 = torch.reduce_sum(self.kern.eKzxKxz(self.feature.Z, X_mean, X_cov), 0)
         else:
             psi1 = expectation(pX, (self.kern, self.feature))
-            psi2 = tf.reduce_sum(expectation(pX, (self.kern, self.feature), (self.kern, self.feature)), axis=0)
+            psi2 = torch.reduce_sum(expectation(pX, (self.kern, self.feature), (self.kern, self.feature)), axis=0)
 
         # psi1 = expectation(pX, (self.kern, self.feature))
-        # psi2 = tf.reduce_sum(expectation(pX, (self.kern, self.feature), (self.kern, self.feature)), axis=0)
+        # psi2 = torch.reduce_sum(expectation(pX, (self.kern, self.feature), (self.kern, self.feature)), axis=0)
 
         Kuu = self.feature.Kuu(self.kern, jitter=settings.numerics.jitter_level)
         Kus = self.feature.Kuf(self.kern, Xnew)
         sigma2 = variance
-        sigma = tf.sqrt(sigma2)
-        L = tf.cholesky(Kuu)
+        sigma = torch.pow(sigma2,0.5)
+        L = torch.cholesky(Kuu)
 
-        A = tf.matrix_triangular_solve(L, tf.transpose(psi1), lower=True) / sigma
-        tmp = tf.matrix_triangular_solve(L, psi2, lower=True)
-        AAT = tf.matrix_triangular_solve(L, tf.transpose(tmp), lower=True) / sigma2
-        B = AAT + tf.eye(num_inducing, dtype=settings.float_type)
-        LB = tf.cholesky(B)
-        c = tf.matrix_triangular_solve(LB, tf.matmul(A, Y), lower=True) / sigma
-        tmp1 = tf.matrix_triangular_solve(L, Kus, lower=True)
-        tmp2 = tf.matrix_triangular_solve(LB, tmp1, lower=True)
-        mean = tf.matmul(tmp2, c, transpose_a=True)
+        A = torch.matrix_triangular_solve(L, torch.transpose(psi1), lower=True) / sigma
+        tmp = torch.matrix_triangular_solve(L, psi2, lower=True)
+        AAT = torch.matrix_triangular_solve(L, torch.transpose(tmp), lower=True) / sigma2
+        B = AAT + torch.eye(num_inducing, dtype=settings.float_type)
+        LB = torch.cholesky(B)
+        c = torch.matrix_triangular_solve(LB, torch.matmul(A, Y), lower=True) / sigma
+        tmp1 = torch.matrix_triangular_solve(L, Kus, lower=True)
+        tmp2 = torch.matrix_triangular_solve(LB, tmp1, lower=True)
+        mean = torch.matmul(tmp2, c, transpose_a=True)
         if full_cov:
-            var = self.kern.K(Xnew) + tf.matmul(tmp2, tmp2, transpose_a=True) \
-                  - tf.matmul(tmp1, tmp1, transpose_a=True)
-            shape = tf.stack([1, 1, tf.shape(Y)[1]])
-            var = tf.tile(tf.expand_dims(var, 2), shape)
+            var = self.kern.K(Xnew) + torch.matmul(tmp2, tmp2, transpose_a=True) \
+                  - torch.matmul(tmp1, tmp1, transpose_a=True)
+            shape = torch.stack([1, 1, torch.shape(Y)[1]])
+            var = torch.tile(torch.expand_dims(var, 2), shape)
         else:
-            var = self.kern.Kdiag(Xnew) + tf.reduce_sum(tf.square(tmp2), 0) \
-                  - tf.reduce_sum(tf.square(tmp1), 0)
-            shape = tf.stack([1, tf.shape(Y)[1]])
-            var = tf.tile(tf.expand_dims(var, 1), shape)
+            var = self.kern.Kdiag(Xnew) + torch.reduce_sum(torch.square(tmp2), 0) \
+                  - torch.reduce_sum(torch.square(tmp1), 0)
+            shape = torch.stack([1, torch.shape(Y)[1]])
+            var = torch.tile(torch.expand_dims(var, 1), shape)
         return mean + self.mean_function(Xnew), var
