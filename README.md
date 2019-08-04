@@ -5,4 +5,4 @@ The implementation of doubly stochastic deep gaussian processes in pytorch. The 
 
 See the arxiv version at https://arxiv.org/abs/1705.08933 in pytorch framework.
 
-Work in Progress.
+# Work in Progress....
